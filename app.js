@@ -1,41 +1,83 @@
-require('dotenv').config();
 const express = require('express');
-const mongoose = require('mongoose');
+const app = express();
+const cors = require('cors');
+const { hashSync, compareSync } = require('bcrypt');
+const UserModel = require('./config/database');
+const jwt = require('jsonwebtoken');
 const passport = require('passport');
 
-const UserModel = require('./model/models');
+app.use(express.json())
+app.use(express.urlencoded({ extended: true }))
+app.use(cors());
+app.use(passport.initialize());
 
-const mongoAtlasUri = "mongodb+srv://" + process.env.MONGO_ATLAS_USER + ":" + process.env.MONGO_ATLAS_PWD + "@cluster0.anqmb.mongodb.net/passport-jwt?retryWrites=true&w=majority";
+require('./config/passport')
 
-mongoose.connect(mongoAtlasUri,  {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  });
+app.post('/register', (req, res) => {
+    const user = new UserModel({
+        username: req.body.username,
+        password: hashSync(req.body.password, 10)
+    })
 
-mongoose.connection.on('error', error => console.log(error) );
-mongoose.Promise = global.Promise;
+    user.save().then(user => {
+        res.send({
+            success: true,
+            message: "User created successfully.",
+            user: {
+                id: user._id,
+                username: user.username
+            }
+        })
+    }).catch(err => {
+        res.send({
+            success: false,
+            message: "Something went wrong",
+            error: err
+        })
+    })
+})
 
-// require('./auth/auth');
+app.post('/login', (req, res) => {
+    UserModel.findOne({ username: req.body.username }).then(user => {
+        //No user found
+        if (!user) {
+            return res.status(401).send({
+                success: false,
+                message: "Could not find the user."
+            })
+        }
 
-const routes = require('./routes/routes');
-const secureRoute = require('./routes/secure-routes');
+        //Incorrect password
+        if (!compareSync(req.body.password, user.password)) {
+            return res.status(401).send({
+                success: false,
+                message: "Incorrect password"
+            })
+        }
 
-const app = express();
+        const jwt_payload = {
+            username: user.username,
+            id: user._id
+        }
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+        const token = jwt.sign(jwt_payload, "Random string", { expiresIn: "1d" })
 
-app.use('/', routes);
+        return res.status(200).send({
+            success: true,
+            message: "Logged in successfully!",
+            token: "Bearer " + token
+        })
+    })
+})
 
-// Plug in the JWT strategy as a middleware so only verified users can access this route.
-app.use('/user', passport.authenticate('jwt', { session: false }), secureRoute);
+app.get('/protected', passport.authenticate('jwt', { session: false }), (req, res) => {
+    return res.status(200).send({
+        success: true,
+        user: {
+            id: req.user._id,
+            username: req.user.username,
+        }
+    })
+})
 
-// Handle errors.
-app.use(function(err, req, res, next) {
-  res.status(err.status || 500);
-  res.json({ error: err });
-});
-
-app.listen(3000, () => {
-  console.log('Server started.')
-});
+app.listen(5000, () => console.log("Listening to port 5000"));
